@@ -159,7 +159,7 @@ public class Router extends Device
         ip.setTtl((byte)64);
         ip.setProtocol(IPv4.PROTOCOL_ICMP);
         ip.setSourceAddress(inIface.getIpAddress());
-        ip.setDestinationAddress(originalIPv4.getDestinationAddress());
+        ip.setDestinationAddress(originalIPv4.getSourceAddress());
 
         ICMP icmp = new ICMP();
         icmp.setIcmpType((byte)11);
@@ -182,7 +182,7 @@ public class Router extends Device
 
     private byte[] getDestinationMacOfNextHop(IPv4 ipPacket)
     {
-        int dstAddr = ipPacket.getDestinationAddress();
+        int dstAddr = ipPacket.getSourceAddress();
         RouteEntry bestMatch = routeTable.lookup(dstAddr);
         if (null == bestMatch)
         { return null; }
