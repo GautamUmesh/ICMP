@@ -3,9 +3,12 @@ package edu.wisc.cs.sdn.vnet.rt;
 import edu.wisc.cs.sdn.vnet.Device;
 import edu.wisc.cs.sdn.vnet.DumpFile;
 import edu.wisc.cs.sdn.vnet.Iface;
-
+import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
+import net.floodlightcontroller.packet.ICMP;
 import net.floodlightcontroller.packet.IPv4;
+
+import java.util.Arrays;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
@@ -119,7 +122,10 @@ public class Router extends Device
         // Check TTL
         ipPacket.setTtl((byte)(ipPacket.getTtl()-1));
         if (0 == ipPacket.getTtl())
-        { return; }
+        {
+            sendTimeExceededPacket(etherPacket, inIface);
+            return;
+        }
         
         // Reset checksum now that TTL is decremented
         ipPacket.resetChecksum();
@@ -133,6 +139,60 @@ public class Router extends Device
         
         // Do route lookup and forward
         this.forwardIpPacket(etherPacket, inIface);
+    }
+
+    private void sendTimeExceededPacket(Ethernet originalPacket, Iface inIface)
+    {
+        IPv4 originalIPv4 = (IPv4) originalPacket.getPayload();
+
+        Ethernet ether = new Ethernet();
+        ether.setEtherType(Ethernet.TYPE_IPv4);
+        ether.setSourceMACAddress(inIface.getMacAddress().toBytes());
+        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
+        if(null == dstMac) {
+            System.err.println("Null dstMac");
+            return;
+        }
+        ether.setDestinationMACAddress(dstMac);
+
+        IPv4 ip = new IPv4();
+        ip.setTtl((byte)64);
+        ip.setProtocol(IPv4.PROTOCOL_ICMP);
+        ip.setSourceAddress(inIface.getIpAddress());
+        ip.setDestinationAddress(originalIPv4.getDestinationAddress());
+
+        ICMP icmp = new ICMP();
+        icmp.setIcmpType((byte)11);
+        icmp.setIcmpCode((byte)0);
+
+        Data data = new Data();
+        int headerLenBytes = originalIPv4.getHeaderLength()*4;
+        byte[] dataBytes = new byte[4 + headerLenBytes + 8];
+        Arrays.fill(dataBytes, 0, 4, (byte)0);
+        byte[] originalIPv4Bytes = originalIPv4.serialize();
+        for(int i = 0; i < headerLenBytes + 8; i++) {
+            dataBytes[i+4] = originalIPv4Bytes[i];
+        }
+
+        ether.setPayload(ip);
+        ip.setPayload(icmp);
+        icmp.setPayload(data);
+        this.forwardIpPacket(ether, inIface);
+    }
+
+    private byte[] getDestinationMacOfNextHop(IPv4 ipPacket)
+    {
+        int dstAddr = ipPacket.getDestinationAddress();
+        RouteEntry bestMatch = routeTable.lookup(dstAddr);
+        if (null == bestMatch)
+        { return null; }
+        int nextHop = bestMatch.getGatewayAddress();
+        if (0 == nextHop)
+        { nextHop = dstAddr; }
+        ArpEntry arpEntry = arpCache.lookup(nextHop);
+        if (null == arpEntry)
+        { return null; }
+        return arpEntry.getMac().toBytes();
     }
 
     private void forwardIpPacket(Ethernet etherPacket, Iface inIface)
