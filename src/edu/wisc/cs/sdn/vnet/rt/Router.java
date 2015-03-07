@@ -165,7 +165,6 @@ public class Router extends Device
         icmp.setIcmpType((byte)11);
         icmp.setIcmpCode((byte)0);
 
-        Data data = new Data();
         int headerLenBytes = originalIPv4.getHeaderLength()*4;
         byte[] dataBytes = new byte[4 + headerLenBytes + 8];
         Arrays.fill(dataBytes, 0, 4, (byte)0);
@@ -173,6 +172,7 @@ public class Router extends Device
         for(int i = 0; i < headerLenBytes + 8; i++) {
             dataBytes[i+4] = originalIPv4Bytes[i];
         }
+        Data data = new Data(dataBytes);
 
         ether.setPayload(ip);
         ip.setPayload(icmp);
