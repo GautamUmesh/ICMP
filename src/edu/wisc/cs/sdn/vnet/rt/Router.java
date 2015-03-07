@@ -102,6 +102,7 @@ public class Router extends Device
     
     private void handleIpPacket(Ethernet etherPacket, Iface inIface)
     {
+        final Ethernet originalEtherPacket = (Ethernet) etherPacket.clone();
         // Make sure it's an IP packet
         if (etherPacket.getEtherType() != Ethernet.TYPE_IPv4)
         { return; }
@@ -123,7 +124,7 @@ public class Router extends Device
         ipPacket.setTtl((byte)(ipPacket.getTtl()-1));
         if (0 == ipPacket.getTtl())
         {
-            sendTimeExceededPacket(etherPacket, inIface);
+            sendTimeExceededPacket(originalEtherPacket, inIface);
             return;
         }
         
