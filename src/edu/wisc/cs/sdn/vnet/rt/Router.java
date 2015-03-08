@@ -135,12 +135,54 @@ public class Router extends Device {
         // Check if packet is destined for one of router's interfaces
         for (Iface iface : this.interfaces.values()) {
             if (ipPacket.getDestinationAddress() == iface.getIpAddress()) {
+                byte protocol = ipPacket.getProtocol();
+                if(protocol == IPv4.PROTOCOL_TCP || protocol == IPv4.PROTOCOL_UDP) {
+                    sendDestinationPortUnreachablePacket(originalEtherPacket, inIface);
+                } else if (protocol == IPv4.PROTOCOL_ICMP) {
+                    ICMP icmpPacket = (ICMP) ipPacket.getPayload();
+                    if(icmpPacket.getIcmpType() == ICMP.TYPE_ECHO_REQUEST) {
+                        sendEchoReplyPacket(originalEtherPacket, inIface);
+                    }
+                }
                 return;
             }
         }
 
         // Do route lookup and forward
         this.forwardIpPacket(etherPacket, inIface, originalEtherPacket);
+    }
+
+    private void sendEchoReplyPacket(Ethernet originalPacket, Iface inIface)
+    {
+        IPv4 originalIPv4 = (IPv4) originalPacket.getPayload();
+
+        Ethernet ether = new Ethernet();
+        ether.setEtherType(Ethernet.TYPE_IPv4);
+        ether.setSourceMACAddress(inIface.getMacAddress().toBytes());
+        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
+        if (null == dstMac) {
+            System.err.println("Null dstMac");
+            return;
+        }
+        ether.setDestinationMACAddress(dstMac);
+
+        IPv4 ip = new IPv4();
+        ip.setTtl((byte) 64);
+        ip.setProtocol(IPv4.PROTOCOL_ICMP);
+        ip.setSourceAddress(originalIPv4.getDestinationAddress());
+        ip.setDestinationAddress(originalIPv4.getSourceAddress());
+
+        ICMP icmp = new ICMP();
+        icmp.setIcmpType((byte)0);
+        icmp.setIcmpCode((byte)0);
+
+        ICMP originalIcmp = (ICMP) originalIPv4.getPayload();
+        Data data = new Data(originalIcmp.getPayload().serialize());
+
+        ether.setPayload(ip);
+        ip.setPayload(icmp);
+        icmp.setPayload(data);
+        sendPacket(ether, inIface);
     }
 
     private void sendTimeExceededPacket(Ethernet originalPacket, Iface inIface) {
@@ -153,6 +195,10 @@ public class Router extends Device {
 
     private void sendDestinationHostUnreachablePacket(Ethernet originalPacket, Iface inIface) {
         sendICMPPacketHelper(originalPacket, inIface, (byte) 3, (byte) 1);
+    }
+
+    private void sendDestinationPortUnreachablePacket(Ethernet originalPacket, Iface inIface) {
+        sendICMPPacketHelper(originalPacket, inIface, (byte) 3, (byte) 3);
     }
 
     private void sendICMPPacketHelper(Ethernet originalPacket, Iface inIface, byte type, byte code) {
