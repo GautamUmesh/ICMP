@@ -124,6 +124,7 @@ public class Router extends Device
         ipPacket.setTtl((byte)(ipPacket.getTtl()-1));
         if (0 == ipPacket.getTtl())
         {
+	    System.out.println("TIME EXCEEDED");
             sendTimeExceededPacket(originalEtherPacket, inIface);
             return;
         }
@@ -178,6 +179,10 @@ public class Router extends Device
         ether.setPayload(ip);
         ip.setPayload(icmp);
         icmp.setPayload(data);
+	icmp.serialize();
+	ip.serialize();
+	ether.serialize();
+	System.out.println(ether.toString());
         this.forwardIpPacket(ether, inIface);
     }
 
