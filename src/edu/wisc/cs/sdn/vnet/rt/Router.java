@@ -183,7 +183,7 @@ public class Router extends Device
 	ip.serialize();
 	ether.serialize();
 	System.out.println(ether.toString());
-        this.forwardIpPacket(ether, inIface);
+	sendPacket(ether, inIface);
     }
 
     private byte[] getDestinationMacOfNextHop(IPv4 ipPacket)
