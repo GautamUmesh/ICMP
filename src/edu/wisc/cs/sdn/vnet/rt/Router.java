@@ -107,7 +107,14 @@ public class Router extends Device {
             case ARP.OP_REQUEST:
                 handleArpRequest(etherPacket, inIface);
                 break;
+            case ARP.OP_REPLY:
+                handleArpReply(etherPacket);
         }
+    }
+
+    private void handleArpReply(Ethernet etherPacket)
+    {
+        ARP arpPacket = (ARP) etherPacket.getPayload();
     }
 
     private void handleArpRequest(Ethernet originalEtherPacket, Iface inIface) {
@@ -116,10 +123,37 @@ public class Router extends Device {
         if (inIface.getIpAddress() != targetIp) {
             return;
         }
+        Ethernet ethernetReply = constructArpPacket(
+                originalEtherPacket.getSourceMACAddress(),
+                ARP.OP_REPLY,
+                originalArpPacket.getSenderHardwareAddress(),
+                originalArpPacket.getTargetProtocolAddress(),
+                inIface);
+
+        sendPacket(ethernetReply, inIface);
+    }
+
+    private void sendArpRequest(int targetIp, Iface inIface) {
+        byte[] broadcast = new byte[6];
+        Arrays.fill(broadcast, (byte) 0xFF);
+        byte[] zeroHw = new byte[6];
+        Arrays.fill(broadcast, (byte) 0);
+        byte [] ip = IPv4.toIPv4AddressBytes(targetIp);
+        Ethernet ethernetPacket = constructArpPacket(
+                broadcast,
+                ARP.OP_REQUEST,
+                zeroHw,
+                ip,
+                inIface);
+        sendPacket(ethernetPacket, inIface);
+    }
+
+    private Ethernet constructArpPacket(byte[] dstMacAddr, short opCode, byte[] targetHwAddr,
+                                        byte[] targetProtoAddr, Iface inIface) {
         Ethernet ethernetReply = new Ethernet();
         ethernetReply.setEtherType(Ethernet.TYPE_ARP);
         ethernetReply.setSourceMACAddress(inIface.getMacAddress().toBytes());
-        ethernetReply.setDestinationMACAddress(originalEtherPacket.getSourceMACAddress());
+        ethernetReply.setDestinationMACAddress(dstMacAddr);
 
         ARP arpReply = new ARP();
         arpReply.setHardwareType(ARP.HW_TYPE_ETHERNET);
@@ -129,11 +163,10 @@ public class Router extends Device {
         arpReply.setOpCode(ARP.OP_REPLY);
         arpReply.setSenderHardwareAddress(inIface.getMacAddress().toBytes());
         arpReply.setSenderProtocolAddress(inIface.getIpAddress());
-        arpReply.setTargetHardwareAddress(originalArpPacket.getSenderHardwareAddress());
-        arpReply.setTargetProtocolAddress(originalArpPacket.getTargetProtocolAddress());
-
+        arpReply.setTargetHardwareAddress(targetHwAddr);
+        arpReply.setTargetProtocolAddress(targetProtoAddr);
         ethernetReply.setPayload(arpReply);
-        sendPacket(ethernetReply, inIface);
+        return ethernetReply;
     }
 
     private void handleIpPacket(Ethernet etherPacket, Iface inIface) {
@@ -328,6 +361,7 @@ public class Router extends Device {
         // Set destination MAC address in Ethernet header
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (null == arpEntry) {
+            sendArpRequest(nextHop, inIface);
             sendDestinationHostUnreachablePacket(etherPacket, inIface);
             return;
         }
