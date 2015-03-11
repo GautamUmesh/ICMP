@@ -137,7 +137,9 @@ public class Router extends Device {
             boolean isBroadcast = Arrays.equals(originalEtherPacket.getDestinationMAC().toBytes(), broadcast);
             if(isBroadcast) {
                 for (Iface routerI : interfaces.values()) {
-                    sendPacket(originalEtherPacket,routerI);
+                    if(inIface.getIpAddress() != routerI.getIpAddress()) {
+                        sendPacket(originalEtherPacket, routerI);
+                    }
                 }
             }
             return;
@@ -146,7 +148,7 @@ public class Router extends Device {
                 originalEtherPacket.getSourceMACAddress(),
                 ARP.OP_REPLY,
                 originalArpPacket.getSenderHardwareAddress(),
-                originalArpPacket.getTargetProtocolAddress(),
+                originalArpPacket.getSenderProtocolAddress(),
                 inIface);
 
         sendPacket(ethernetReply, inIface);
@@ -181,7 +183,7 @@ public class Router extends Device {
         arpReply.setProtocolType(ARP.PROTO_TYPE_IP);
         arpReply.setHardwareAddressLength((byte) Ethernet.DATALAYER_ADDRESS_LENGTH);
         arpReply.setProtocolAddressLength((byte) 4);
-        arpReply.setOpCode(ARP.OP_REPLY);
+        arpReply.setOpCode(opCode);
         arpReply.setSenderHardwareAddress(inIface.getMacAddress().toBytes());
         arpReply.setSenderProtocolAddress(inIface.getIpAddress());
         arpReply.setTargetHardwareAddress(targetHwAddr);
