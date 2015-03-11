@@ -158,7 +158,7 @@ public class Router extends Device {
         byte[] broadcast = new byte[6];
         Arrays.fill(broadcast, (byte) 0xFF);
         byte[] zeroHw = new byte[6];
-        Arrays.fill(broadcast, (byte) 0);
+        Arrays.fill(zeroHw, (byte) 0);
         byte[] ip = IPv4.toIPv4AddressBytes(targetIp);
         for(Iface inIface : interfaces.values()) {
             Ethernet ethernetPacket = constructArpPacket(
