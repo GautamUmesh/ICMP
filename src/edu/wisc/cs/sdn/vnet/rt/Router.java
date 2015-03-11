@@ -409,6 +409,7 @@ public class Router extends Device {
                 }
                 if (numAttempts == 0) {
                     sendDestinationHostUnreachablePacket(originalPacket, iface);
+                    cancel();
                 } else {
                     sendArpRequest(ip, iface);
                 }
