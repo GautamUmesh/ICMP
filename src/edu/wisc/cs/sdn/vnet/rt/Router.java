@@ -95,7 +95,7 @@ public class Router extends Device {
         for(Iface di : interfaces.values()) {
             arpCache.insert(di.getMacAddress(), di.getIpAddress());
         }
-        /********************************************************************/
+        /******************************************X**************************/
         /* TODO: Handle packets                                             */
 
         switch (etherPacket.getEtherType()) {
