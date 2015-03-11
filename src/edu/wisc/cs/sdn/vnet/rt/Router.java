@@ -130,6 +130,14 @@ public class Router extends Device {
         ARP originalArpPacket = (ARP) originalEtherPacket.getPayload();
         int targetIp = ByteBuffer.wrap(originalArpPacket.getTargetProtocolAddress()).getInt();
         if (inIface.getIpAddress() != targetIp) {
+            byte [] broadcast = new byte[6];
+            Arrays.fill(broadcast, (byte)0xFF);
+            boolean isBroadcast = Arrays.equals(originalEtherPacket.getDestinationMAC().toBytes(), broadcast);
+            if(isBroadcast) {
+                for (Iface routerI : interfaces.values()) {
+                    sendPacket(originalEtherPacket,routerI);
+                }
+            }
             return;
         }
         Ethernet ethernetReply = constructArpPacket(
@@ -399,6 +407,7 @@ public class Router extends Device {
             this.ip = ip;
             numAttempts = 3;
         }
+
 
         @Override
         public void run() {
