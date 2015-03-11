@@ -269,7 +269,7 @@ public class Router extends Device {
 
         byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
         if (null == dstMac) {
-            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress());
+            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress(), inIface);
             return;
         }
         ether.setDestinationMACAddress(dstMac);
@@ -324,7 +324,7 @@ public class Router extends Device {
 
         byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
         if (null == dstMac) {
-            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress());
+            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress(), inIface);
             return;
         }
         ether.setDestinationMACAddress(dstMac);
@@ -386,29 +386,31 @@ public class Router extends Device {
         // Set destination MAC address in Ethernet header
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (null == arpEntry) {
-            sendPacketLater(etherPacket, inIface, nextHop);
+            sendPacketLater(etherPacket, inIface, nextHop, outIface);
             return;
         }
         etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
         sendPacket(etherPacket, outIface);
     }
 
-    void sendPacketLater(Ethernet originalPacket, Iface inIface, int ip)
+    void sendPacketLater(Ethernet originalPacket, Iface inIface, int ip, Iface oface)
     {
-        TimerTask arpRequester = new ArpTimer(originalPacket, inIface, ip);
+        TimerTask arpRequester = new ArpTimer(originalPacket, inIface, ip, oface);
         scheduler.schedule(arpRequester, 0, 1000);
     }
 
     class ArpTimer extends TimerTask {
         final Ethernet originalPacket;
         final Iface iface;
+        final Iface oface;
         int numAttempts;
         final int ip;
 
-        public ArpTimer(Ethernet originalPacket, Iface iface, int ip) {
+        public ArpTimer(Ethernet originalPacket, Iface iface, int ip, Iface oface) {
             this.originalPacket = originalPacket;
             this.iface = iface;
             this.ip = ip;
+            this.oface = oface;
             numAttempts = 3;
         }
 
@@ -418,7 +420,7 @@ public class Router extends Device {
                 ArpEntry entry = arpCache.lookup(ip);
                 if(entry != null) {
                     originalPacket.setDestinationMACAddress(entry.getMac().toBytes());
-                    sendPacket(originalPacket, iface);
+                    sendPacket(originalPacket, oface);
                     cancel();
                     return;
                 }
