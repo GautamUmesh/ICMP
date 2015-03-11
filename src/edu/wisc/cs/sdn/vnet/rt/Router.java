@@ -142,19 +142,21 @@ public class Router extends Device {
         sendPacket(ethernetReply, inIface);
     }
 
-    private void sendArpRequest(int targetIp, Iface inIface) {
+    private void sendArpRequest(int targetIp) {
         byte[] broadcast = new byte[6];
         Arrays.fill(broadcast, (byte) 0xFF);
         byte[] zeroHw = new byte[6];
         Arrays.fill(broadcast, (byte) 0);
         byte[] ip = IPv4.toIPv4AddressBytes(targetIp);
-        Ethernet ethernetPacket = constructArpPacket(
-                broadcast,
-                ARP.OP_REQUEST,
-                zeroHw,
-                ip,
-                inIface);
-        sendPacket(ethernetPacket, inIface);
+        for(Iface inIface : interfaces.values()) {
+            Ethernet ethernetPacket = constructArpPacket(
+                    broadcast,
+                    ARP.OP_REQUEST,
+                    zeroHw,
+                    ip,
+                    inIface);
+            sendPacket(ethernetPacket, inIface);
+        }
     }
 
     private Ethernet constructArpPacket(byte[] dstMacAddr, short opCode, byte[] targetHwAddr,
@@ -411,7 +413,7 @@ public class Router extends Device {
                     sendDestinationHostUnreachablePacket(originalPacket, iface);
                     cancel();
                 } else {
-                    sendArpRequest(ip, iface);
+                    sendArpRequest(ip);
                 }
                 numAttempts--;
         }
