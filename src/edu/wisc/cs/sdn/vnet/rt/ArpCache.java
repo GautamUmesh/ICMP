@@ -33,7 +33,7 @@ public class ArpCache
 	 * @param mac MAC address corresponding to IP address
 	 * @param ip IP address corresponding to MAC address
 	 */
-	public void insert(MACAddress mac, int ip)
+	public synchronized  void insert(MACAddress mac, int ip)
 	{ this.entries.put(ip, new ArpEntry(mac, ip)); }
 	
 	/**
@@ -41,7 +41,7 @@ public class ArpCache
 	 * @param ip IP address whose MAC address is desired
 	 * @return the IP->MAC mapping from the cache; null if none exists 
 	 */
-	public ArpEntry lookup(int ip)
+	public synchronized  ArpEntry lookup(int ip)
 	{ return this.entries.get(ip); }
 	
 	/**

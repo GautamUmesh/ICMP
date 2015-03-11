@@ -5,13 +5,19 @@ import edu.wisc.cs.sdn.vnet.DumpFile;
 import edu.wisc.cs.sdn.vnet.Iface;
 import net.floodlightcontroller.packet.*;
 
+import javax.crypto.Mac;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
  */
 public class Router extends Device {
+
+    private Timer scheduler;
+
     /**
      * Routing table for the router
      */
@@ -31,6 +37,7 @@ public class Router extends Device {
         super(host, logfile);
         this.routeTable = new RouteTable();
         this.arpCache = new ArpCache();
+        scheduler = new Timer();
     }
 
     /**
@@ -112,9 +119,11 @@ public class Router extends Device {
         }
     }
 
-    private void handleArpReply(Ethernet etherPacket)
-    {
+    private void handleArpReply(Ethernet etherPacket) {
         ARP arpPacket = (ARP) etherPacket.getPayload();
+        int ip = IPv4.toIPv4Address(arpPacket.getSenderProtocolAddress());
+        MACAddress mac  = new MACAddress(arpPacket.getSenderHardwareAddress());
+        arpCache.insert(mac, ip);
     }
 
     private void handleArpRequest(Ethernet originalEtherPacket, Iface inIface) {
@@ -138,7 +147,7 @@ public class Router extends Device {
         Arrays.fill(broadcast, (byte) 0xFF);
         byte[] zeroHw = new byte[6];
         Arrays.fill(broadcast, (byte) 0);
-        byte [] ip = IPv4.toIPv4AddressBytes(targetIp);
+        byte[] ip = IPv4.toIPv4AddressBytes(targetIp);
         Ethernet ethernetPacket = constructArpPacket(
                 broadcast,
                 ARP.OP_REQUEST,
@@ -361,12 +370,43 @@ public class Router extends Device {
         // Set destination MAC address in Ethernet header
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (null == arpEntry) {
-            sendArpRequest(nextHop, inIface);
-            sendDestinationHostUnreachablePacket(etherPacket, inIface);
+            TimerTask arpRequester = new ArpTimer(etherPacket, inIface, nextHop);
+            scheduler.schedule(arpRequester, 0, 1000);
             return;
         }
         etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
 
         this.sendPacket(etherPacket, outIface);
+    }
+
+    class ArpTimer extends TimerTask {
+        final Ethernet originalPacket;
+        final Iface iface;
+        int numAttempts;
+        final int ip;
+
+        public ArpTimer(Ethernet originalPacket, Iface iface, int ip) {
+            this.originalPacket = originalPacket;
+            this.iface = iface;
+            this.ip = ip;
+            numAttempts = 3;
+        }
+
+        @Override
+        public void run() {
+                ArpEntry entry = arpCache.lookup(ip);
+                if(entry != null) {
+                    originalPacket.setDestinationMACAddress(entry.getMac().toBytes());
+                    sendPacket(originalPacket, iface);
+                    cancel();
+                    return;
+                }
+                if (numAttempts == 0) {
+                    sendDestinationHostUnreachablePacket(originalPacket, iface);
+                } else {
+                    sendArpRequest(ip, iface);
+                }
+                numAttempts--;
+        }
     }
 }
