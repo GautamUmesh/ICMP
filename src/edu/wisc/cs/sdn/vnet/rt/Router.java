@@ -235,12 +235,6 @@ public class Router extends Device {
         Ethernet ether = new Ethernet();
         ether.setEtherType(Ethernet.TYPE_IPv4);
         ether.setSourceMACAddress(inIface.getMacAddress().toBytes());
-        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
-        if (null == dstMac) {
-            System.err.println("Null dstMac");
-            return;
-        }
-        ether.setDestinationMACAddress(dstMac);
 
         IPv4 ip = new IPv4();
         ip.setTtl((byte) 64);
@@ -258,6 +252,13 @@ public class Router extends Device {
         ether.setPayload(ip);
         ip.setPayload(icmp);
         icmp.setPayload(data);
+
+        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
+        if (null == dstMac) {
+            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress());
+            return;
+        }
+        ether.setDestinationMACAddress(dstMac);
         sendPacket(ether, inIface);
     }
 
@@ -283,12 +284,6 @@ public class Router extends Device {
         Ethernet ether = new Ethernet();
         ether.setEtherType(Ethernet.TYPE_IPv4);
         ether.setSourceMACAddress(inIface.getMacAddress().toBytes());
-        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
-        if (null == dstMac) {
-            System.err.println("Null dstMac");
-            return;
-        }
-        ether.setDestinationMACAddress(dstMac);
 
         IPv4 ip = new IPv4();
         ip.setTtl((byte) 64);
@@ -312,6 +307,13 @@ public class Router extends Device {
         ether.setPayload(ip);
         ip.setPayload(icmp);
         icmp.setPayload(data);
+
+        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
+        if (null == dstMac) {
+            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress());
+            return;
+        }
+        ether.setDestinationMACAddress(dstMac);
         sendPacket(ether, inIface);
     }
 
@@ -370,13 +372,17 @@ public class Router extends Device {
         // Set destination MAC address in Ethernet header
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (null == arpEntry) {
-            TimerTask arpRequester = new ArpTimer(etherPacket, inIface, nextHop);
-            scheduler.schedule(arpRequester, 0, 1000);
+            sendPacketLater(etherPacket, inIface, nextHop);
             return;
         }
         etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
+        sendPacket(etherPacket, outIface);
+    }
 
-        this.sendPacket(etherPacket, outIface);
+    void sendPacketLater(Ethernet originalPacket, Iface inIface, int ip)
+    {
+        TimerTask arpRequester = new ArpTimer(originalPacket, inIface, ip);
+        scheduler.schedule(arpRequester, 0, 1000);
     }
 
     class ArpTimer extends TimerTask {
