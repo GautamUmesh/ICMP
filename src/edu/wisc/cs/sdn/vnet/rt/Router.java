@@ -92,7 +92,9 @@ public class Router extends Device {
     public void handlePacket(Ethernet etherPacket, Iface inIface) {
         System.out.println("*** -> Received packet: " +
                 etherPacket.toString().replace("\n", "\n\t"));
-
+        for(Iface di : interfaces.values()) {
+            arpCache.insert(di.getMacAddress(), di.getIpAddress());
+        }
         /********************************************************************/
         /* TODO: Handle packets                                             */
 
