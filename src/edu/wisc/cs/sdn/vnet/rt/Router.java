@@ -70,7 +70,7 @@ public class Router extends Device {
                 while (it.hasNext()) {
                     Map.Entry<String, RIPInternalEntry> entry = it.next();
                     if (entry.getValue().timestamp + 30 * 1000 < currentTime) {
-                        String seg[] = entry.getKey().split("|");
+                        String seg[] = entry.getKey().split(",");
                         int na = Integer.parseInt(seg[0]);
                         int mask = Integer.parseInt(seg[1]);
                         it.remove();
@@ -488,7 +488,7 @@ public class Router extends Device {
     }
 
     private String getHashKey(int na, int mask) {
-        return "" + na + "|" + mask;
+        return na + "," + mask;
     }
 
     private int getNetworkAddress(int ip, int mask) {
