@@ -483,7 +483,7 @@ public class Router extends Device {
             ripInternalMap.put(getHashKey(na, mask), new RIPInternalEntry(0, -1));
             sendPacket(constructRipRequest(di), di);
         }
-        scheduler.schedule(new RIPHeartBeatTask(), 10 * 1000);
+        scheduler.schedule(new RIPHeartBeatTask(), 0, 10 * 1000);
         scheduler.schedule(new RouterEntryPurgeTask(), 0, 1000);
     }
 
