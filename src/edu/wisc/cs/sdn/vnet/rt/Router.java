@@ -6,15 +6,14 @@ import edu.wisc.cs.sdn.vnet.Iface;
 import net.floodlightcontroller.packet.*;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.*;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
  */
 public class Router extends Device {
 
+    public static final int RIP_BROADCAST_IP = IPv4.toIPv4Address("224.0.0.9");
     private Timer scheduler;
 
     /**
@@ -26,6 +25,8 @@ public class Router extends Device {
      * ARP cache for the router
      */
     private ArpCache arpCache;
+    public static final byte[] BROADCAST = new byte[6];
+    final Map<String, RIPInternalEntry> ripInternalMap = Collections.synchronizedMap(new HashMap<String, RIPInternalEntry>());
 
     /**
      * Creates a router for a specific host.
@@ -37,6 +38,47 @@ public class Router extends Device {
         this.routeTable = new RouteTable();
         this.arpCache = new ArpCache();
         scheduler = new Timer();
+        Arrays.fill(BROADCAST, (byte) 0xFF);
+    }
+
+    class RIPInternalEntry {
+        int metric;
+        long timestamp;
+
+        public RIPInternalEntry(int metric, long timestamp) {
+            this.metric = metric;
+            this.timestamp = timestamp;
+        }
+    }
+
+    class RIPHeartBeatTask extends TimerTask {
+        @Override
+        public void run() {
+            for (Iface i : interfaces.values()) {
+                Ethernet packet = constructRipUnsolicitedResponse(i);
+                sendPacket(packet, i);
+            }
+        }
+    }
+
+    class RouterEntryPurgeTask extends TimerTask {
+        @Override
+        public void run() {
+            long currentTime = System.currentTimeMillis();
+            synchronized (ripInternalMap) {
+                Iterator<Map.Entry<String, RIPInternalEntry>> it = ripInternalMap.entrySet().iterator();
+                while (it.hasNext()) {
+                    Map.Entry<String, RIPInternalEntry> entry = it.next();
+                    if (entry.getValue().timestamp + 30 * 1000 < currentTime) {
+                        String seg[] = entry.getKey().split("|");
+                        int na = Integer.parseInt(seg[0]);
+                        int mask = Integer.parseInt(seg[1]);
+                        it.remove();
+                        routeTable.remove(na, mask);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -91,7 +133,7 @@ public class Router extends Device {
     public void handlePacket(Ethernet etherPacket, Iface inIface) {
         System.out.println("*** -> Received packet: " +
                 etherPacket.toString().replace("\n", "\n\t"));
-        for(Iface di : interfaces.values()) {
+        for (Iface di : interfaces.values()) {
             arpCache.insert(di.getMacAddress(), di.getIpAddress());
         }
         /******************************************X**************************/
@@ -99,7 +141,11 @@ public class Router extends Device {
 
         switch (etherPacket.getEtherType()) {
             case Ethernet.TYPE_IPv4:
-                this.handleIpPacket(etherPacket, inIface);
+                if (isRipPacket(etherPacket)) {
+                    handleRipPacket(etherPacket, inIface);
+                } else {
+                    this.handleIpPacket(etherPacket, inIface);
+                }
                 break;
             case Ethernet.TYPE_ARP:
                 handleArpPacket(etherPacket, inIface);
@@ -107,6 +153,50 @@ public class Router extends Device {
         }
 
         /********************************************************************/
+    }
+
+    private void handleRipPacket(Ethernet etherPacket, Iface iface) {
+        IPv4 ip = (IPv4) etherPacket.getPayload();
+        UDP udp = (UDP) ip.getPayload();
+        RIPv2 rip = (RIPv2) udp.getPayload();
+        if (rip.getCommand() == RIPv2.COMMAND_RESPONSE) {
+            handleRipResponse(rip, ip.getSourceAddress(), iface);
+        }
+    }
+
+    private void handleRipResponse(RIPv2 rip, int ip, Iface iface) {
+        for (RIPv2Entry entry : rip.getEntries()) {
+            int na = entry.getAddress();
+            int mask = entry.getSubnetMask();
+            int metric = entry.getMetric() + 1;
+            String hashKey = getHashKey(na, mask);
+            boolean shouldAdd = !(ripInternalMap.containsKey(hashKey) && metric > ripInternalMap.get(hashKey).metric);
+            if (shouldAdd) {
+                if (routeTable.find(na, mask) != null) {
+                    routeTable.remove(na, mask);
+                }
+                routeTable.insert(na, ip, mask, iface);
+                ripInternalMap.put(hashKey, new RIPInternalEntry(metric, System.currentTimeMillis()));
+            }
+        }
+
+    }
+
+    private boolean isRipPacket(Ethernet ethernet) {
+        if (ethernet.getEtherType() != Ethernet.TYPE_IPv4) {
+            return false;
+        }
+
+        IPv4 ip = (IPv4) ethernet.getPayload();
+        if (!(ip.getPayload() instanceof UDP) || ip.getDestinationAddress() != RIP_BROADCAST_IP) {
+            return false;
+        }
+
+        UDP udp = (UDP) ip.getPayload();
+        if (udp.getDestinationPort() != UDP.RIP_PORT) {
+            return false;
+        }
+        return true;
     }
 
     private void handleArpPacket(Ethernet etherPacket, Iface inIface) {
@@ -123,7 +213,7 @@ public class Router extends Device {
     private void handleArpReply(Ethernet etherPacket) {
         ARP arpPacket = (ARP) etherPacket.getPayload();
         int ip = IPv4.toIPv4Address(arpPacket.getSenderProtocolAddress());
-        MACAddress mac  = new MACAddress(arpPacket.getSenderHardwareAddress());
+        MACAddress mac = new MACAddress(arpPacket.getSenderHardwareAddress());
         arpCache.insert(mac, ip);
     }
 
@@ -144,14 +234,12 @@ public class Router extends Device {
     }
 
     private void sendArpRequest(int targetIp) {
-        byte[] broadcast = new byte[6];
-        Arrays.fill(broadcast, (byte) 0xFF);
         byte[] zeroHw = new byte[6];
         Arrays.fill(zeroHw, (byte) 0);
         byte[] ip = IPv4.toIPv4AddressBytes(targetIp);
-        for(Iface inIface : interfaces.values()) {
+        for (Iface inIface : interfaces.values()) {
             Ethernet ethernetPacket = constructArpPacket(
-                    broadcast,
+                    BROADCAST,
                     ARP.OP_REQUEST,
                     zeroHw,
                     ip,
@@ -382,10 +470,82 @@ public class Router extends Device {
         sendPacket(etherPacket, outIface);
     }
 
-    void sendPacketLater(Ethernet originalPacket, Iface inIface, int ip, Iface oface)
-    {
+    private void sendPacketLater(Ethernet originalPacket, Iface inIface, int ip, Iface oface) {
         TimerTask arpRequester = new ArpTimer(originalPacket, inIface, ip, oface);
         scheduler.schedule(arpRequester, 0, 1000);
+    }
+
+    public void ripInitialize() {
+        for (Iface di : interfaces.values()) {
+            int mask = di.getSubnetMask();
+            int na = getNetworkAddress(di.getIpAddress(), mask);
+            routeTable.insert(na, 0, mask, di);
+            ripInternalMap.put(getHashKey(na, mask), new RIPInternalEntry(0, -1));
+            sendPacket(constructRipRequest(di), di);
+        }
+        scheduler.schedule(new RIPHeartBeatTask(), 10 * 1000);
+        scheduler.schedule(new RouterEntryPurgeTask(), 0, 1000);
+    }
+
+    private String getHashKey(int na, int mask) {
+        return "" + na + "|" + mask;
+    }
+
+    private int getNetworkAddress(int ip, int mask) {
+        return ip & mask;
+    }
+
+    private Ethernet constructRipRequest(Iface iface) {
+        return constructRipPacket(iface, RIP_BROADCAST_IP, BROADCAST, RIPv2.COMMAND_REQUEST);
+    }
+
+    private Ethernet constructRipSolicitedResponse(Iface iface, int destIp, byte destMac[]) {
+        return constructRipPacket(iface, destIp, destMac, RIPv2.COMMAND_RESPONSE);
+    }
+
+    private Ethernet constructRipUnsolicitedResponse(Iface iface) {
+        return constructRipPacket(iface, RIP_BROADCAST_IP, BROADCAST, RIPv2.COMMAND_RESPONSE);
+    }
+
+
+    private Ethernet constructRipPacket(Iface iface, int destIp, byte[] destMac, byte command) {
+        Ethernet ethernet = new Ethernet();
+        ethernet.setEtherType(Ethernet.TYPE_IPv4);
+        ethernet.setDestinationMACAddress(destMac);
+        ethernet.setSourceMACAddress(iface.getMacAddress().toBytes());
+
+        UDP udp = new UDP();
+        udp.setDestinationPort(UDP.RIP_PORT);
+        udp.setSourcePort(UDP.RIP_PORT);
+
+        IPv4 ip = new IPv4();
+        ip.setDestinationAddress(destIp);
+        ip.setSourceAddress(iface.getIpAddress());
+        ip.setTtl((byte) 16);
+        ip.setProtocol(IPv4.PROTOCOL_UDP);
+
+        RIPv2 rip = constructRipv2Packet(command);
+
+        udp.setPayload(rip);
+        ip.setPayload(udp);
+        ethernet.setPayload(ip);
+        return ethernet;
+    }
+
+    private RIPv2 constructRipv2Packet(byte command) {
+        RIPv2 rip = new RIPv2();
+        rip.setCommand(command);
+        if (command == RIPv2.COMMAND_RESPONSE) {
+            synchronized (routeTable.entries) {
+                for (RouteEntry entry : routeTable.entries) {
+                    int ip = entry.getDestinationAddress();
+                    int mask = entry.getMaskAddress();
+                    RIPv2Entry riPv2Entry = new RIPv2Entry(ip, mask, ripInternalMap.get(ip).metric);
+                    rip.addEntry(riPv2Entry);
+                }
+            }
+        }
+        return rip;
     }
 
     class ArpTimer extends TimerTask {
@@ -406,20 +566,20 @@ public class Router extends Device {
 
         @Override
         public void run() {
-                ArpEntry entry = arpCache.lookup(ip);
-                if(entry != null) {
-                    originalPacket.setDestinationMACAddress(entry.getMac().toBytes());
-                    sendPacket(originalPacket, oface);
-                    cancel();
-                    return;
-                }
-                if (numAttempts == 0) {
-                    sendDestinationHostUnreachablePacket(originalPacket, iface);
-                    cancel();
-                } else {
-                    sendArpRequest(ip);
-                }
-                numAttempts--;
+            ArpEntry entry = arpCache.lookup(ip);
+            if (entry != null) {
+                originalPacket.setDestinationMACAddress(entry.getMac().toBytes());
+                sendPacket(originalPacket, oface);
+                cancel();
+                return;
+            }
+            if (numAttempts == 0) {
+                sendDestinationHostUnreachablePacket(originalPacket, iface);
+                cancel();
+            } else {
+                sendArpRequest(ip);
+            }
+            numAttempts--;
         }
     }
 }
