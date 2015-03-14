@@ -540,7 +540,8 @@ public class Router extends Device {
                 for (RouteEntry entry : routeTable.entries) {
                     int ip = entry.getDestinationAddress();
                     int mask = entry.getMaskAddress();
-                    RIPv2Entry riPv2Entry = new RIPv2Entry(ip, mask, ripInternalMap.get(ip).metric);
+                    String hashKey = getHashKey(ip, mask);
+                    RIPv2Entry riPv2Entry = new RIPv2Entry(ip, mask, ripInternalMap.get(hashKey).metric);
                     rip.addEntry(riPv2Entry);
                 }
             }
