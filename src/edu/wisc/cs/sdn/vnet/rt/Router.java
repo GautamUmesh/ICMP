@@ -69,7 +69,8 @@ public class Router extends Device {
                 Iterator<Map.Entry<String, RIPInternalEntry>> it = ripInternalMap.entrySet().iterator();
                 while (it.hasNext()) {
                     Map.Entry<String, RIPInternalEntry> entry = it.next();
-                    if (entry.getValue().timestamp + 30 * 1000 < currentTime) {
+                    long ts = entry.getValue().timestamp;
+                    if (ts != -1 && ts + 30 * 1000 < currentTime) {
                         String seg[] = entry.getKey().split(",");
                         int na = Integer.parseInt(seg[0]);
                         int mask = Integer.parseInt(seg[1]);
