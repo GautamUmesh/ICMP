@@ -54,17 +54,24 @@ public class Router extends Device {
     class RIPHeartBeatTask extends TimerTask {
         @Override
         public void run() {
+		sendUnsolicitedRipRequests();
+        }
+    }
+
+    private void sendUnsolicitedRipRequests()
+    {
             for (Iface i : interfaces.values()) {
                 Ethernet packet = constructRipUnsolicitedResponse(i);
                 sendPacket(packet, i);
             }
-        }
     }
+
 
     class RouterEntryPurgeTask extends TimerTask {
         @Override
         public void run() {
             long currentTime = System.currentTimeMillis();
+	    boolean modified = false;
             synchronized (ripInternalMap) {
                 Iterator<Map.Entry<String, RIPInternalEntry>> it = ripInternalMap.entrySet().iterator();
                 while (it.hasNext()) {
@@ -76,9 +83,13 @@ public class Router extends Device {
                         int mask = Integer.parseInt(seg[1]);
                         it.remove();
                         routeTable.remove(na, mask);
+			modified = true;
                     }
                 }
             }
+		if(modified) {
+			sendUnsolicitedRipRequests();
+		}	
         }
     }
 
@@ -162,10 +173,25 @@ public class Router extends Device {
         RIPv2 rip = (RIPv2) udp.getPayload();
         if (rip.getCommand() == RIPv2.COMMAND_RESPONSE) {
             handleRipResponse(rip, ip.getSourceAddress(), iface);
-        }
+        } else if(rip.getCommand() == RIPv2.COMMAND_REQUEST)  { 
+	    handleRipRequest(ip.getSourceAddress(), iface);
+	}
+    }
+
+    private void handleRipRequest(int ip, Iface iface)
+    {
+	Ethernet ether = constructRipSolicitedResponse(iface, ip, BROADCAST);
+        byte[] dstMac = getDestinationMacOfNextHop(ip);
+        if (null == dstMac) {
+            sendPacketLater(ether, iface, ip, iface);
+	} else {
+            ether.setDestinationMACAddress(dstMac);
+	    sendPacket(ether, iface);
+	}
     }
 
     private void handleRipResponse(RIPv2 rip, int ip, Iface iface) {
+	boolean modified = false;
         for (RIPv2Entry entry : rip.getEntries()) {
             int na = entry.getAddress();
             int mask = entry.getSubnetMask();
@@ -178,9 +204,12 @@ public class Router extends Device {
                 }
                 routeTable.insert(na, ip, mask, iface);
                 ripInternalMap.put(hashKey, new RIPInternalEntry(metric, System.currentTimeMillis()));
+		//modified = true;
             }
         }
-
+	if(modified) {
+		sendUnsolicitedRipRequests();
+	}
     }
 
     private boolean isRipPacket(Ethernet ethernet) {
@@ -189,7 +218,7 @@ public class Router extends Device {
         }
 
         IPv4 ip = (IPv4) ethernet.getPayload();
-        if (!(ip.getPayload() instanceof UDP) || ip.getDestinationAddress() != RIP_BROADCAST_IP) {
+        if (!(ip.getPayload() instanceof UDP)) {
             return false;
         }
 
@@ -234,19 +263,17 @@ public class Router extends Device {
         sendPacket(ethernetReply, inIface);
     }
 
-    private void sendArpRequest(int targetIp) {
+    private void sendArpRequest(int targetIp, Iface oface) {
         byte[] zeroHw = new byte[6];
         Arrays.fill(zeroHw, (byte) 0);
         byte[] ip = IPv4.toIPv4AddressBytes(targetIp);
-        for (Iface inIface : interfaces.values()) {
             Ethernet ethernetPacket = constructArpPacket(
                     BROADCAST,
                     ARP.OP_REQUEST,
                     zeroHw,
                     ip,
-                    inIface);
-            sendPacket(ethernetPacket, inIface);
-        }
+                    oface);
+            sendPacket(ethernetPacket, oface);
     }
 
     private Ethernet constructArpPacket(byte[] dstMacAddr, short opCode, byte[] targetHwAddr,
@@ -345,7 +372,7 @@ public class Router extends Device {
         ip.setPayload(icmp);
         icmp.setPayload(data);
 
-        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
+        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4.getSourceAddress());
         if (null == dstMac) {
             sendPacketLater(ether, inIface, originalIPv4.getSourceAddress(), inIface);
             return;
@@ -400,7 +427,7 @@ public class Router extends Device {
         ip.setPayload(icmp);
         icmp.setPayload(data);
 
-        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4);
+        byte[] dstMac = getDestinationMacOfNextHop(originalIPv4.getSourceAddress());
         if (null == dstMac) {
             sendPacketLater(ether, inIface, originalIPv4.getSourceAddress(), inIface);
             return;
@@ -409,8 +436,7 @@ public class Router extends Device {
         sendPacket(ether, inIface);
     }
 
-    private byte[] getDestinationMacOfNextHop(IPv4 ipPacket) {
-        int dstAddr = ipPacket.getSourceAddress();
+    private byte[] getDestinationMacOfNextHop(int dstAddr) {
         RouteEntry bestMatch = routeTable.lookup(dstAddr);
         if (null == bestMatch) {
             return null;
@@ -579,7 +605,7 @@ public class Router extends Device {
                 sendDestinationHostUnreachablePacket(originalPacket, iface);
                 cancel();
             } else {
-                sendArpRequest(ip);
+                sendArpRequest(ip, oface);
             }
             numAttempts--;
         }
