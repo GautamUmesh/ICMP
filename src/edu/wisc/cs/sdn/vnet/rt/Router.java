@@ -197,14 +197,14 @@ public class Router extends Device {
             int mask = entry.getSubnetMask();
             int metric = entry.getMetric() + 1;
             String hashKey = getHashKey(na, mask);
-            boolean shouldAdd = !(ripInternalMap.containsKey(hashKey) && metric > ripInternalMap.get(hashKey).metric);
+            boolean shouldAdd = !(ripInternalMap.containsKey(hashKey) && metric >= ripInternalMap.get(hashKey).metric);
             if (shouldAdd) {
                 if (routeTable.find(na, mask) != null) {
                     routeTable.remove(na, mask);
                 }
                 routeTable.insert(na, ip, mask, iface);
                 ripInternalMap.put(hashKey, new RIPInternalEntry(metric, System.currentTimeMillis()));
-		//modified = true;
+		modified = true;
             }
         }
 	if(modified) {
