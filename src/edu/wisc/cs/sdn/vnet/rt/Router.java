@@ -13,7 +13,6 @@ import java.util.*;
  */
 public class Router extends Device {
 
-    public static final int RIP_BROADCAST_IP = IPv4.toIPv4Address("224.0.0.9");
     private Timer scheduler;
 
     /**
@@ -25,8 +24,13 @@ public class Router extends Device {
      * ARP cache for the router
      */
     private ArpCache arpCache;
+    
     public static final byte[] BROADCAST = new byte[6];
-    final Map<String, RIPInternalEntry> ripInternalMap = Collections.synchronizedMap(new HashMap<String, RIPInternalEntry>());
+    public static final int RIP_BROADCAST_IP = IPv4.toIPv4Address("224.0.0.9");
+	final Map<String, RIPInternalEntry> ripInternalMap = Collections
+			.synchronizedMap(new HashMap<String, RIPInternalEntry>());
+	final Set<Integer> arpRequestsInProgress = Collections
+			.synchronizedSet(new HashSet<Integer>());
 
     /**
      * Creates a router for a specific host.
@@ -582,15 +586,23 @@ public class Router extends Device {
         final Iface oface;
         int numAttempts;
         final int ip;
+        boolean isSenderThread;
+        boolean isWaitingThread;
 
         public ArpTimer(Ethernet originalPacket, Iface iface, int ip, Iface oface) {
             this.originalPacket = originalPacket;
             this.iface = iface;
             this.ip = ip;
             this.oface = oface;
-            numAttempts = 3;
+            if (arpRequestsInProgress.contains(ip)) {
+            	isWaitingThread = true;
+            	numAttempts = 0;
+            } else {
+            	arpRequestsInProgress.add(ip);
+            	numAttempts = 3;
+            }
+            isSenderThread = !isWaitingThread;
         }
-
 
         @Override
         public void run() {
@@ -598,16 +610,25 @@ public class Router extends Device {
             if (entry != null) {
                 originalPacket.setDestinationMACAddress(entry.getMac().toBytes());
                 sendPacket(originalPacket, oface);
+                arpRequestsInProgress.remove(ip);
                 cancel();
                 return;
             }
-            if (numAttempts == 0) {
-                sendDestinationHostUnreachablePacket(originalPacket, iface);
-                cancel();
-            } else {
-                sendArpRequest(ip, oface);
+            if (isSenderThread) {
+	            if (numAttempts == 0) {
+	                sendDestinationHostUnreachablePacket(originalPacket, iface);
+	                arpRequestsInProgress.remove(ip);
+	                cancel();
+	            } else {
+	                sendArpRequest(ip, oface);
+	            }
+	            numAttempts--;
+            } else if (isWaitingThread) {
+            	if (!arpRequestsInProgress.contains(ip)) {
+            		sendDestinationHostUnreachablePacket(originalPacket, iface);
+	                cancel();
+            	}
             }
-            numAttempts--;
         }
     }
 }
