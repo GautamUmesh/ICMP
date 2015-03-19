@@ -545,6 +545,7 @@ public class Router extends Device {
 			Iface outIface) {
 		IPv4 ipv4 = (IPv4) originalPacket.getPayload();
 		final int ip = ipv4.getDestinationAddress();
+		originalPacket.setDestinationMACAddress(BROADCAST);
 		synchronized (packetQueue) {
 			if (!packetQueue.containsKey(ip)) {
 				packetQueue.put(ip, new ArrayList<Ethernet>());
