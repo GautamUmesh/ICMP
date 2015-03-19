@@ -29,9 +29,20 @@ public class Router extends Device {
     public static final int RIP_BROADCAST_IP = IPv4.toIPv4Address("224.0.0.9");
 	final Map<String, RIPInternalEntry> ripInternalMap = Collections
 			.synchronizedMap(new HashMap<String, RIPInternalEntry>());
-	final Set<Integer> arpRequestsInProgress = Collections
-			.synchronizedSet(new HashSet<Integer>());
+    final Set<Integer> arpAttempt = Collections.synchronizedSet(new HashSet<Integer>());
+    final Map<Integer, List<Ethernet>> packetQueue = Collections.synchronizedMap(new HashMap<Integer,List<Ethernet>>());
 
+    class InterfacePair {
+	public Iface inIface;
+	public Iface outIface;
+	public InterfacePair(Iface inIface, Iface outIface) 
+	{
+		this.inIface = inIface;
+		this.outIface = outIface;
+	}
+    }
+
+    final Map<Ethernet, InterfacePair> packetInterfaceMap = Collections.synchronizedMap(new HashMap<Ethernet, InterfacePair>());
     /**
      * Creates a router for a specific host.
      *
@@ -185,7 +196,7 @@ public class Router extends Device {
         Ethernet ether = constructRipSolicitedResponse(iface, ip, BROADCAST);
         byte[] dstMac = getDestinationMacOfNextHop(ip);
         if (null == dstMac) {
-            sendPacketLater(ether, iface, ip, iface);
+            sendPacketLater(ether, iface, iface);
         } else {
             ether.setDestinationMACAddress(dstMac);
             sendPacket(ether, iface);
@@ -248,7 +259,24 @@ public class Router extends Device {
         int ip = IPv4.toIPv4Address(arpPacket.getSenderProtocolAddress());
         MACAddress mac = new MACAddress(arpPacket.getSenderHardwareAddress());
         arpCache.insert(mac, ip);
+	sendPendingPackets(mac.toBytes(), ip);
     }
+
+    void sendPendingPackets(byte[] mac, int ip) {
+	    synchronized(packetQueue) {
+		    arpAttempt.remove(ip);
+		    List<Ethernet> ipPacketQueue = packetQueue.get(ip);
+		    packetQueue.remove(ip);
+		    if(ipPacketQueue != null) {
+			    for(Ethernet packet: ipPacketQueue) {
+				    Iface oface = packetInterfaceMap.get(packet).outIface;
+				    packet.setDestinationMACAddress(mac);
+				    sendPacket(packet, oface);
+				    packetInterfaceMap.remove(packet);
+			    }
+		    }
+	    }
+    }	
 
     private void handleArpRequest(Ethernet originalEtherPacket, Iface inIface) {
         ARP originalArpPacket = (ARP) originalEtherPacket.getPayload();
@@ -377,7 +405,7 @@ public class Router extends Device {
 
         byte[] dstMac = getDestinationMacOfNextHop(originalIPv4.getSourceAddress());
         if (null == dstMac) {
-            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress(), inIface);
+            sendPacketLater(ether, inIface, inIface);
             return;
         }
         ether.setDestinationMACAddress(dstMac);
@@ -432,7 +460,7 @@ public class Router extends Device {
 
         byte[] dstMac = getDestinationMacOfNextHop(originalIPv4.getSourceAddress());
         if (null == dstMac) {
-            sendPacketLater(ether, inIface, originalIPv4.getSourceAddress(), inIface);
+            sendPacketLater(ether, inIface, inIface);
             return;
         }
         ether.setDestinationMACAddress(dstMac);
@@ -493,16 +521,29 @@ public class Router extends Device {
         // Set destination MAC address in Ethernet header
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (null == arpEntry) {
-            sendPacketLater(etherPacket, inIface, nextHop, outIface);
+            sendPacketLater(etherPacket, inIface, outIface);
             return;
         }
         etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
         sendPacket(etherPacket, outIface);
     }
 
-    private void sendPacketLater(Ethernet originalPacket, Iface inIface, int ip, Iface oface) {
-        TimerTask arpRequester = new ArpTimer(originalPacket, inIface, ip, oface);
-        scheduler.schedule(arpRequester, 0, 1000);
+    private void sendPacketLater(Ethernet originalPacket, Iface inIface, Iface outIface) {
+	IPv4 ipv4 = (IPv4) originalPacket.getPayload();
+	final int ip = ipv4.getDestinationAddress();
+	synchronized(packetQueue) {
+		if(!packetQueue.containsKey(ip)) {
+			packetQueue.put(ip, new ArrayList<Ethernet>());
+		}
+		List<Ethernet> ipPacketQueue = packetQueue.get(ip);
+		ipPacketQueue.add(originalPacket);
+		packetInterfaceMap.put(originalPacket, new InterfacePair(inIface, outIface));
+	
+		if(!arpAttempt.contains(ip)) {
+        		TimerTask arpRequester = new ArpTimer(ip, outIface);
+        		scheduler.schedule(arpRequester, 0, 1000);
+		}
+	}
     }
 
     public void ripInitialize() {
@@ -579,56 +620,47 @@ public class Router extends Device {
         }
         return rip;
     }
+	
+    void dropPackets(int ip)
+    {
+	    synchronized(packetQueue) {
+		    arpAttempt.remove(ip);
+		    List<Ethernet> ipPacketQueue = ipPacketQueue = packetQueue.get(ip);
+		    packetQueue.remove(ip);
+		    if(ipPacketQueue != null) {
+			    for(Ethernet packet: ipPacketQueue) {
+				    sendDestinationHostUnreachablePacket(packet, packetInterfaceMap.get(packet).inIface);
+				    packetInterfaceMap.remove(packet);
+			    }
+		    }
+	    }
+    }
 
     class ArpTimer extends TimerTask {
-        final Ethernet originalPacket;
-        final Iface iface;
-        final Iface oface;
-        int numAttempts;
+        int numAttempts = 3;
+	final Iface oface;
         final int ip;
-        boolean isSenderThread;
-        boolean isWaitingThread;
 
-        public ArpTimer(Ethernet originalPacket, Iface iface, int ip, Iface oface) {
-            this.originalPacket = originalPacket;
-            this.iface = iface;
+        public ArpTimer(int ip, Iface oface) {
             this.ip = ip;
-            this.oface = oface;
-            if (arpRequestsInProgress.contains(ip)) {
-            	isWaitingThread = true;
-            	numAttempts = 0;
-            } else {
-            	arpRequestsInProgress.add(ip);
-            	numAttempts = 3;
-            }
-            isSenderThread = !isWaitingThread;
+	    this.oface = oface;
         }
 
         @Override
         public void run() {
             ArpEntry entry = arpCache.lookup(ip);
             if (entry != null) {
-                originalPacket.setDestinationMACAddress(entry.getMac().toBytes());
-                sendPacket(originalPacket, oface);
-                arpRequestsInProgress.remove(ip);
                 cancel();
                 return;
-            }
-            if (isSenderThread) {
-	            if (numAttempts == 0) {
-	                sendDestinationHostUnreachablePacket(originalPacket, iface);
-	                arpRequestsInProgress.remove(ip);
-	                cancel();
-	            } else {
-	                sendArpRequest(ip, oface);
-	            }
-	            numAttempts--;
-            } else if (isWaitingThread) {
-            	if (!arpRequestsInProgress.contains(ip)) {
-            		sendDestinationHostUnreachablePacket(originalPacket, iface);
-	                cancel();
-            	}
-            }
-        }
+            } else {
+		if(numAttempts == 0) {
+		    dropPackets(ip);
+	 	    cancel();
+		} else {
+	            sendArpRequest(ip, oface);
+		}
+	    }
+            numAttempts--;
+	}
     }
 }
