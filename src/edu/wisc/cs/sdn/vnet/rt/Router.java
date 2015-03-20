@@ -544,7 +544,11 @@ public class Router extends Device {
 	private void sendPacketLater(Ethernet originalPacket, Iface inIface,
 			Iface outIface) {
 		IPv4 ipv4 = (IPv4) originalPacket.getPayload();
-		final int ip = ipv4.getDestinationAddress();
+                RouteEntry bestMatch = this.routeTable.lookup(ipv4.getDestinationAddress());
+		int ip = bestMatch.getGatewayAddress();
+		if (0 == ip) {
+			ip = ipv4.getDestinationAddress();
+		}
 		originalPacket.setDestinationMACAddress(BROADCAST);
 		synchronized (packetQueue) {
 			if (!packetQueue.containsKey(ip)) {
